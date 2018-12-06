@@ -10,8 +10,6 @@ import Data.List (maximumBy, foldl', sort)
 import Data.Ord (comparing)
 import Text.Parsec hiding (Empty)
 
-import Data.Maybe (catMaybes)
-
 data Rect = Rect { rectID     :: Int
                  , rectLeft   :: Int
                  , rectTop    :: Int
@@ -52,6 +50,7 @@ sheetSize rects =
   where
     calcBound f = f (maximumBy (comparing f) rects)
 
+isOverlapCell :: [Rect] -> (Int, Int) -> Bool
 isOverlapCell rects cell =
   (> 1) . length . take 2 . filter (cellInRect cell) $ rects
   where
@@ -60,11 +59,16 @@ isOverlapCell rects cell =
 
 ---------------- Brute force ----------------
 
+bruteForceSolve :: [Rect] -> (Int, [Rect])
 bruteForceSolve rects =
   let (w, h) = sheetSize rects
       cells = [(i, j) | i <- [0..w-1], j <- [0..h-1]]
       overlapArea = length . filter (isOverlapCell rects) $ cells
-  in overlapArea
+      noOverlapRects = filter (\r -> not $ any (\r1 -> r1 /= r && r1 `overlaps` r) rects) rects
+  in (overlapArea, noOverlapRects)
+  where
+    (Rect _ l1 t1 w1 h1) `overlaps` (Rect _ l2 t2 w2 h2) =
+      l1 < (l2+w2) && (l1+w1) > l2 && t1 < (t2+h2) && (t1+h1) > t2
 
 ---------------- Interval tree ----------------
 
@@ -98,8 +102,9 @@ insert o@(interval, _) tree = case tree of
 
     half = flip shift (-1)
 
-includingIntervals :: Ord a => Interval a -> IntervalTree a b -> [(Interval a, b)]
-includingIntervals interval = go []
+overlappingIntervals :: Ord a =>
+  (Interval a -> Interval a -> Bool) -> Interval a -> IntervalTree a b -> [(Interval a, b)]
+overlappingIntervals f interval = go []
   where
     go acc t = case t of
       Empty _ _ -> acc
@@ -108,14 +113,24 @@ includingIntervals interval = go []
       Node _ center is r | interval `rightOf` center -> go (acc' is acc) r
       Node l _      is r                             -> go (go (acc' is acc) l) r
       where
-        acc' is acc = filter (\(i,_) -> i `includes` interval) is ++ acc
+        acc' is acc = filter (\(i,_) -> i `f` interval) is ++ acc
         leftmostStart = fst . unInterval . fst . head
 
-    includes (Interval (start1, end1)) (Interval (start2, end2))
-      = start1 <= start2 && end2 <= end1
+includingIntervals :: Ord a => Interval a -> IntervalTree a b -> [(Interval a, b)]
+includingIntervals =
+  overlappingIntervals $ \(Interval (start1, end1)) (Interval (start2, end2)) ->
+    start1 <= start2 && end2 <= end1
+
+intersectingIntervals :: Ord a => Interval a -> IntervalTree a b -> [(Interval a, b)]
+intersectingIntervals =
+  overlappingIntervals $ \(Interval (start1, end1)) (Interval (start2, end2)) ->
+    start2 < end1 && start1 < end2
 
 fromList :: (Ord a, Ord b, Bits a, Num a) => a -> a -> [(Interval a, b)] -> IntervalTree a b
 fromList start end = foldl' (flip insert) (Empty start end)
+
+toInterval :: (Rect -> Int) -> (Rect -> Int) -> Rect -> Interval Int
+toInterval pos dim rect = Interval (pos rect, pos rect + dim rect)
 
 rectIntervalTrees :: [Rect] -> (IntervalTree Int Rect, IntervalTree Int Rect)
 rectIntervalTrees rects =
@@ -123,20 +138,19 @@ rectIntervalTrees rects =
   in ( fromList 0 w . map (\r -> (toInterval rectLeft rectWidth r, r)) $ rects
      , fromList 0 h . map (\r -> (toInterval rectTop rectHeight r, r)) $ rects
      )
-  where
-    toInterval pos dim rect = Interval (pos rect, pos rect + dim rect)
 
 toTree :: (Show a, Show b) => IntervalTree a b -> T.Tree String
 toTree (Empty start end) = T.Node (show ("E", start, end)) []
 toTree (Node l c is r) = T.Node (show ("N", c, is)) [toTree l, toTree r]
 
-intervalTreeSolve :: [Rect] -> Int
+intervalTreeSolve :: [Rect] -> (Int, [Rect])
 intervalTreeSolve rects =
   let (w, h) = sheetSize rects
       cells = [(i, j) | i <- [0..w-1], j <- [0..h-1]]
       (xTree, yTree) = rectIntervalTrees rects
       overlapArea = length . filter (\c -> isOverlapCell (cellRects xTree yTree c) c) $ cells
-  in overlapArea
+      noOverlapRects = filter ((== 1) . Set.size . overlappingRects xTree yTree) rects
+  in (overlapArea, noOverlapRects)
   where
     cellRects xTree yTree (x,y) =
       nub . map snd
@@ -144,8 +158,15 @@ intervalTreeSolve rects =
 
     nub = Set.toList . Set.fromList
 
+    rectIntervals tree pos dim rect =
+      Set.fromList . map snd . intersectingIntervals (toInterval pos dim rect) $ tree
+
+    overlappingRects xTree yTree rect =
+      rectIntervals xTree rectLeft rectWidth rect `Set.intersection` rectIntervals yTree rectTop rectHeight rect
+
 main :: IO ()
 main = do
   rects <- readInput . lines <$> getContents
-  let solution = intervalTreeSolve rects
-  putStrLn $ "Overlap Area = " ++ show solution
+  let (overlapArea, noOverlapRects) = bruteForceSolve rects
+  putStrLn $ "Overlap Area = " ++ show overlapArea
+  putStrLn $ "No overlap rects = " ++ show noOverlapRects
