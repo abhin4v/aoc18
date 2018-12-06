@@ -6,7 +6,7 @@ import Data.Bits (Bits(shift))
 import Data.Function (on)
 import qualified Data.Set as Set
 import qualified Data.Tree as T
-import Data.List (maximumBy, foldl', sort)
+import Data.List (maximumBy, foldl', sort, sortOn)
 import Data.Ord (comparing)
 import Text.Parsec hiding (Empty)
 
@@ -80,6 +80,7 @@ instance Show a => Show (Interval a) where
 data IntervalTree a b = Node { itLeft :: IntervalTree a b
                              , itCenter :: a
                              , itIntervals :: [(Interval a, b)]
+                             , itEndSortedIntervals:: [Interval a]
                              , itRight :: IntervalTree a b
                              }
                       | Empty a a deriving (Show, Eq)
@@ -91,14 +92,14 @@ leftOf (Interval (_, end)) x = end <= x
 insert :: (Ord a, Ord b, Bits a, Num a) => (Interval a, b) -> IntervalTree a b -> IntervalTree a b
 insert o@(interval, _) tree = case tree of
   Empty start end -> go start end (start + half (end - start))
-  Node l center is r | interval `leftOf` center   -> Node (insert o l) center is r
-  Node l center is r | interval `rightOf` center  -> Node l center is (insert o r)
-  Node l center is r -> Node l center (sort (o:is)) r
+  Node l center is es r | interval `leftOf` center   -> Node (insert o l) center is es r
+  Node l center is es r | interval `rightOf` center  -> Node l center is es (insert o r)
+  Node l center is es r -> Node l center (sort (o:is)) (sortOn (negate . snd . unInterval) (interval:es)) r
   where
     go start end center
-      | interval `leftOf` center   = Node (insert o (Empty start center)) center [] (Empty center end)
-      | interval `rightOf` center  = Node (Empty start center) center [] (insert o (Empty center end))
-      | otherwise                  = Node (Empty start center) center [o] (Empty center end)
+      | interval `leftOf` center   = Node (insert o (Empty start center)) center [] [] (Empty center end)
+      | interval `rightOf` center  = Node (Empty start center) center [] [] (insert o (Empty center end))
+      | otherwise                  = Node (Empty start center) center [o] [interval] (Empty center end)
 
     half = flip shift (-1)
 
@@ -108,13 +109,15 @@ overlappingIntervals f interval = go []
   where
     go acc t = case t of
       Empty _ _ -> acc
-      Node l _ is _      | not (null is) && interval `leftOf` leftmostStart is -> go acc l
-      Node l center is _ | interval `leftOf` center  -> go (acc' is acc) l
-      Node _ center is r | interval `rightOf` center -> go (acc' is acc) r
-      Node l _      is r                             -> go (go (acc' is acc) l) r
+      Node l _      is _  _ | not (null is) && interval `leftOf` leftmostStart is -> go acc l
+      Node _ _      _  es r | not (null es) && interval `rightOf` rightmostEnd es -> go acc r
+      Node l center is _  _ | interval `leftOf` center  -> go (acc' is acc) l
+      Node _ center is _  r | interval `rightOf` center -> go (acc' is acc) r
+      Node l _      is _  r                             -> go (go (acc' is acc) l) r
       where
         acc' is acc = filter (\(i,_) -> i `f` interval) is ++ acc
         leftmostStart = fst . unInterval . fst . head
+        rightmostEnd = snd . unInterval . head
 
 includingIntervals :: Ord a => Interval a -> IntervalTree a b -> [(Interval a, b)]
 includingIntervals =
@@ -141,7 +144,7 @@ rectIntervalTrees rects =
 
 toTree :: (Show a, Show b) => IntervalTree a b -> T.Tree String
 toTree (Empty start end) = T.Node (show ("E", start, end)) []
-toTree (Node l c is r) = T.Node (show ("N", c, is)) [toTree l, toTree r]
+toTree (Node l c is _ r) = T.Node (show ("N", c, is)) [toTree l, toTree r]
 
 intervalTreeSolve :: [Rect] -> (Int, [Rect])
 intervalTreeSolve rects =
@@ -167,6 +170,6 @@ intervalTreeSolve rects =
 main :: IO ()
 main = do
   rects <- readInput . lines <$> getContents
-  let (overlapArea, noOverlapRects) = bruteForceSolve rects
+  let (overlapArea, noOverlapRects) = intervalTreeSolve rects
   putStrLn $ "Overlap Area = " ++ show overlapArea
   putStrLn $ "No overlap rects = " ++ show noOverlapRects
