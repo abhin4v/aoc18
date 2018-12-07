@@ -25,20 +25,20 @@ simplify acc s
          then simplify acc (S.drop 2 s)
          else simplify (acc |> x) (S.drop 1 s)
 
-collapse :: S.Seq Char -> Int
+collapse :: S.Seq Char -> S.Seq Char
 collapse s =
   let simplified = simplify S.empty s
   in if S.length simplified == S.length s
-     then S.length s
+     then s
      else collapse simplified
 
-betterCollapse :: S.Seq Char -> (Char, Int)
+betterCollapse :: S.Seq Char -> S.Seq Char
 betterCollapse s =
-  minimumBy (compare `on` snd)
-  . map (\c -> (c, collapse $ S.filter (\c' -> toLower c' /= toLower c) s))
+  minimumBy (compare `on` S.length)
+  . map (\c -> collapse $ S.filter (\c' -> toLower c' /= toLower c) s)
   $ ['a' .. 'z']
 
 main = do
   input <- S.fromList . filter (/= '\n') <$> getContents
-  putStrLn $ "Size = " ++ show (collapse input)
-  putStrLn $ "Better Size = " ++ show (betterCollapse input)
+  putStrLn $ "Size = " ++ show (S.length $ collapse input)
+  putStrLn $ "Better Size = " ++ show (S.length $ betterCollapse (collapse input))
