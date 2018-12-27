@@ -10,64 +10,68 @@ import Data.List (maximumBy, foldl', sort, sortOn)
 import Data.Ord (comparing)
 import Text.Parsec hiding (Empty)
 
-data Rect = Rect { rectID     :: Int
-                 , rectLeft   :: Int
-                 , rectTop    :: Int
-                 , rectWidth  :: Int
-                 , rectHeight :: Int
-                 }
+data Claim = Claim { claimID     :: Int
+                   , claimLeft   :: Int
+                   , claimTop    :: Int
+                   , claimWidth  :: Int
+                   , claimHeight :: Int
+                   }
 
-instance Eq Rect where
-  (==) = (==) `on` rectID
+instance Eq Claim where
+  (==) = (==) `on` claimID
 
-instance Ord Rect where
-  compare = compare `on` rectID
+instance Ord Claim where
+  compare = compare `on` claimID
 
-instance Show Rect where
-  show (Rect id l t w h) = "#" ++ show id ++ " " ++ show l ++ "," ++ show t ++ ":" ++ show (l+w) ++ "," ++ show (t+h)
+instance Show Claim where
+  show (Claim id l t w h) =
+    "<#" ++ show id ++ " "
+    ++ "(" ++ show l ++ "," ++ show t ++ ")-"
+    ++ "(" ++ show (l+w) ++ "," ++ show (t+h) ++ ")>"
 
-inputP :: Parsec String () Rect
-inputP =
-  (\id (l,t) (w,h) -> Rect id l t w h)
+claimParser :: Parsec String () Claim
+claimParser =
+  (\id (l,t) (w,h) -> Claim id l t w h)
   <$> (idP <* spaces <* char '@' <* spaces)
   <*> (posP <* char ':' <* spaces)
   <*> dimP
   where
     intP = read <$> some digit
-    idP = char '#' *> intP
+    idP  = char '#' *> intP
     posP = (,) <$> (intP <* char ',') <*> intP
     dimP = (,) <$> (intP <* char 'x') <*> intP
 
-readInput :: [String] -> [Rect]
-readInput ls = case traverse (parse inputP "") ls of
-  Left e -> error (show e)
+readInput :: String -> [Claim]
+readInput input = case traverse (parse claimParser "") $ lines input of
+  Left e   -> error (show e)
   Right rs -> rs
 
-sheetSize :: [Rect] -> (Int, Int)
-sheetSize rects =
-  ( calcBound (\(Rect _ l _ w _) -> l + w)
-  , calcBound (\(Rect _ _ t _ h) -> t + h))
+sheetSize :: [Claim] -> (Int, Int)
+sheetSize claims = (calcBound claimRight, calcBound claimBottom)
   where
-    calcBound f = f (maximumBy (comparing f) rects)
+    claimRight  (Claim _ l _ w _) = l + w
+    claimBottom (Claim _ _ t _ h) = t + h
+    calcBound f = f (maximumBy (comparing f) claims)
 
-isOverlapCell :: [Rect] -> (Int, Int) -> Bool
-isOverlapCell rects cell =
-  (> 1) . length . take 2 . filter (cellInRect cell) $ rects
+isOverlapCell :: [Claim] -> (Int, Int) -> Bool
+isOverlapCell claims cell =
+  (> 1) . length . filter (cellInClaim cell) $ claims
   where
-    cellInRect (x, y) (Rect _ l t w h) =
+    cellInClaim (x, y) (Claim _ l t w h) =
       l <= x && (l+w) >= (x+1) && t <= y && (t+h) >= (y+1)
 
 ---------------- Brute force ----------------
 
-bruteForceSolve :: [Rect] -> (Int, [Rect])
-bruteForceSolve rects =
-  let (w, h) = sheetSize rects
-      cells = [(i, j) | i <- [0..w-1], j <- [0..h-1]]
-      overlapArea = length . filter (isOverlapCell rects) $ cells
-      noOverlapRects = filter (\r -> not $ any (\r1 -> r1 /= r && r1 `overlaps` r) rects) rects
-  in (overlapArea, noOverlapRects)
+bruteForceSolve :: [Claim] -> (Int, [Claim])
+bruteForceSolve claims =
+  let (width, height) = sheetSize claims
+      cells           = [(i, j) | i <- [0..width-1], j <- [0..height-1]]
+      overlapArea     = length . filter (isOverlapCell claims) $ cells
+      noOverlapClaims =
+        filter (\c -> not $ any (\c' -> c' /= c && c' `overlaps` c) claims) claims
+  in (overlapArea, noOverlapClaims)
   where
-    (Rect _ l1 t1 w1 h1) `overlaps` (Rect _ l2 t2 w2 h2) =
+    (Claim _ l1 t1 w1 h1) `overlaps` (Claim _ l2 t2 w2 h2) =
       l1 < (l2+w2) && (l1+w1) > l2 && t1 < (t2+h2) && (t1+h1) > t2
 
 ---------------- Interval tree ----------------
@@ -132,44 +136,44 @@ intersectingIntervals =
 fromList :: (Ord a, Ord b, Bits a, Num a) => a -> a -> [(Interval a, b)] -> IntervalTree a b
 fromList start end = foldl' (flip insert) (Empty start end)
 
-toInterval :: (Rect -> Int) -> (Rect -> Int) -> Rect -> Interval Int
-toInterval pos dim rect = Interval (pos rect, pos rect + dim rect)
+toInterval :: (Claim -> Int) -> (Claim -> Int) -> Claim -> Interval Int
+toInterval pos dim claim = Interval (pos claim, pos claim + dim claim)
 
-rectIntervalTrees :: [Rect] -> (IntervalTree Int Rect, IntervalTree Int Rect)
-rectIntervalTrees rects =
-  let (w, h) = sheetSize rects
-  in ( fromList 0 w . map (\r -> (toInterval rectLeft rectWidth r, r)) $ rects
-     , fromList 0 h . map (\r -> (toInterval rectTop rectHeight r, r)) $ rects
+claimIntervalTrees :: [Claim] -> (IntervalTree Int Claim, IntervalTree Int Claim)
+claimIntervalTrees claims =
+  let (w, h) = sheetSize claims
+  in ( fromList 0 w . map (\c -> (toInterval claimLeft claimWidth c, c)) $ claims
+     , fromList 0 h . map (\c -> (toInterval claimTop claimHeight c, c)) $ claims
      )
 
 toTree :: (Show a, Show b) => IntervalTree a b -> T.Tree String
 toTree (Empty start end) = T.Node (show ("E", start, end)) []
 toTree (Node l c is _ r) = T.Node (show ("N", c, is)) [toTree l, toTree r]
 
-intervalTreeSolve :: [Rect] -> (Int, [Rect])
-intervalTreeSolve rects =
-  let (w, h) = sheetSize rects
+intervalTreeSolve :: [Claim] -> (Int, [Claim])
+intervalTreeSolve claims =
+  let (w, h) = sheetSize claims
       cells = [(i, j) | i <- [0..w-1], j <- [0..h-1]]
-      (xTree, yTree) = rectIntervalTrees rects
-      overlapArea = length . filter (\c -> isOverlapCell (cellRects xTree yTree c) c) $ cells
-      noOverlapRects = filter ((== 1) . Set.size . overlappingRects xTree yTree) rects
-  in (overlapArea, noOverlapRects)
+      (xTree, yTree) = claimIntervalTrees claims
+      overlapArea = length . filter (\c -> isOverlapCell (cellClaims xTree yTree c) c) $ cells
+      noOverlapClaims = filter ((== 1) . Set.size . overlappingClaims xTree yTree) claims
+  in (overlapArea, noOverlapClaims)
   where
-    cellRects xTree yTree (x,y) =
+    cellClaims xTree yTree (x,y) =
       nub . map snd
       $ includingIntervals (Interval (x, x+1)) xTree ++ includingIntervals (Interval (y, y+1)) yTree
 
     nub = Set.toList . Set.fromList
 
-    rectIntervals tree pos dim rect =
-      Set.fromList . map snd . intersectingIntervals (toInterval pos dim rect) $ tree
+    claimIntervals tree pos dim claim =
+      Set.fromList . map snd . intersectingIntervals (toInterval pos dim claim) $ tree
 
-    overlappingRects xTree yTree rect =
-      rectIntervals xTree rectLeft rectWidth rect `Set.intersection` rectIntervals yTree rectTop rectHeight rect
+    overlappingClaims xTree yTree claim =
+      claimIntervals xTree claimLeft claimWidth claim `Set.intersection` claimIntervals yTree claimTop claimHeight claim
 
 main :: IO ()
 main = do
-  rects <- readInput . lines <$> getContents
-  let (overlapArea, noOverlapRects) = intervalTreeSolve rects
+  claims <- readInput <$> getContents
+  let (overlapArea, noOverlapClaims) = intervalTreeSolve claims
   putStrLn $ "Overlap Area = " ++ show overlapArea
-  putStrLn $ "No overlap rects = " ++ show noOverlapRects
+  putStrLn $ "No overlap claims = " ++ show noOverlapClaims
